@@ -25,7 +25,10 @@
 
 ## 最需要帮忙的地方
 
-- **位置自动带入**：现在 calibre 只把选中文字传给搜索源，书名和页码得手填。如果谁找到阅读器传递位置的途径（比如高亮 CFI），这是最有价值的一处改进。
+- **阅读位置**：书名已能自动带入（读 `%APPDATA%\calibre\viewer-webengine.json` 的 `session_data.standalone_recently_opened[0]`）。位置还缺，可用的线索：
+  - `%APPDATA%\calibre\viewer\annots\<sha256>.json`，文件名是 `sha256(书文件绝对路径的 UTF-8 字节)`，内容里有 `{"type":"last-read","pos":"epubcfi(...)","timestamp":...}`，还有高亮/书签记录（带文字片段）。
+  - `%LOCALAPPDATA%\calibre-cache\viewer-reading-rates.json` 里按同一 hash 记了 `chapter_times`。
+  - 难点是把 `epubcfi` 换算成「第几章 / 百分之几」：需要解析转换后的正文（azw3/mobi 是 calibre 临时转成 epub 的，缓存在 `%LOCALAPPDATA%\calibre-cache\ev2`，目录 ACL 不对外开放），而且很多书转换后整个正文是一个 html 文件，spine 索引没有区分度。谁有更好的思路欢迎开 issue 讨论。
 - **多 AI 提供方**：现在只对接了 DeepSeek 的 `/chat/completions`。任何 OpenAI 兼容端点应该都能用（改 `ai_base_url`），但没逐个验证过。
 - **笔记格式**：目前是「一条一个 `---` 分隔块」。如果你有更好的 Markdown 组织方式（比如按书分文件、加书名作为二级标题），欢迎讨论。
 - **跨平台**：Windows 专属（PowerShell + VBS）。macOS/Linux 上大概要重写成 Python 小服务，如果谁愿意做，我可以把协议和表单结构整理出来。

@@ -89,6 +89,28 @@ function Get-ApiKey($settings) {
     return ''
 }
 
+function Get-ReadingNow {
+    $vp = Join-Path $env:APPDATA 'calibre\viewer-webengine.json'
+    if (-not (Test-Path -LiteralPath $vp)) { return $null }
+    try {
+        $j = [System.IO.File]::ReadAllText($vp, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+        $items = @($j.session_data.standalone_recently_opened)
+        if ($items.Count -eq 0) { return $null }
+        $top = $items[0]
+        if (-not $top.title) { return $null }
+        $authors = ''
+        if ($top.authors) { $authors = (@($top.authors) -join '、') }
+        return [pscustomobject]@{
+            Title   = [string]$top.title
+            Authors = $authors
+            Path    = [string]$top.pathtoebook
+            When    = [string]$top.timestamp
+        }
+    } catch {
+        return $null
+    }
+}
+
 function Get-KnownBooks([string]$notePath, [int]$limit = 15) {
     $books = New-Object System.Collections.ArrayList
     try {
@@ -274,6 +296,7 @@ $script:FormPage = @'
       <input id="loc" name="loc" value="__LOC__" placeholder="p.23 / 第三讲">
     </div>
   </div>
+  <div class="path">__NOW__</div>
   <label for="thoughts">想法</label>
   <textarea id="thoughts" name="thoughts" class="t" placeholder="当时想到什么…">__THOUGHTS__</textarea>
   <div class="row tight">
@@ -469,6 +492,7 @@ function Handle-Request($client) {
             '__THOUGHTS__' = (HtmlEncode $thoughts)
             '__MAXCHARS__' = (HtmlEncode ([string]$maxChars))
             '__BOOKS__' = $opts
+            '__NOW__' = ''
             '__AIBLOCK__' = (Build-AiBlock $aiReply $maxChars)
             '__WARN__' = $warn
             '__PATH__' = (HtmlEncode $settings.note_path)
@@ -503,6 +527,14 @@ function Handle-Request($client) {
     elseif ($q.ContainsKey('word')) { $text = $q['word'] }
     $bookValue = $settings.last_book
     if ($q.ContainsKey('book')) { $bookValue = $q['book'] }
+    $nowText = ''
+    $now = Get-ReadingNow
+    if ($now) {
+        if (-not $bookValue -or -not $q.ContainsKey('book')) { $bookValue = $now.Title }
+        $nowText = '阅读器里正在读：' + $now.Title
+        if ($now.Authors) { $nowText += ' · ' + $now.Authors }
+        $nowText = HtmlEncode $nowText
+    }
     $locValue = $settings.last_loc
     if ($q.ContainsKey('loc')) { $locValue = $q['loc'] }
     $opts = ''
@@ -520,6 +552,7 @@ function Handle-Request($client) {
         '__THOUGHTS__' = ''
         '__MAXCHARS__' = (HtmlEncode ([string]$settings.ai_max_chars))
         '__BOOKS__' = $opts
+        '__NOW__' = $nowText
         '__AIBLOCK__' = ''
         '__WARN__' = $warn
         '__PATH__' = (HtmlEncode $settings.note_path)
@@ -528,6 +561,8 @@ function Handle-Request($client) {
 
 if ($Test) {
     $s = Get-Settings
+    $now = Get-ReadingNow
+    if ($now) { Write-Output ('READING=' + $now.Title + ' / ' + $now.Authors + ' / ' + $now.When) } else { Write-Output 'READING=' }
     $entry = Format-Entry '第一行原文' '《测试书》 · p.1' '测试想法' '这句是 AI 的回应。' 50
     $tmp = Join-Path $env:TEMP ('quote_selftest_' + [guid]::NewGuid().ToString('N') + '.md')
     $written = Add-Entry $tmp $entry
