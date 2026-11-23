@@ -1,0 +1,10 @@
+# 运行时配置，含 API Key，不要提交
+quote_settings.json
+
+# calibre 配置的本地备份
+viewer-webengine.json.bak-*
+*.bak-*
+
+# 自检与测试产物
+_ai_test*
+*.tmp

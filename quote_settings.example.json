@@ -1,0 +1,10 @@
+{
+    "note_path": "C:\\Users\\<你的用户名>\\Documents\\摘录笔记.md",
+    "last_book": "",
+    "last_loc": "",
+    "ai_base_url": "https://api.deepseek.com",
+    "ai_model": "deepseek-chat",
+    "ai_max_chars": 50,
+    "ai_timeout": 45,
+    "deepseek_api_key": ""
+}
