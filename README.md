@@ -119,6 +119,14 @@ Key 的读取顺序：环境变量 `DEEPSEEK_API_KEY` → `quote_settings.json` 
 - 输出是纯追加的 Markdown，不做去重、不加索引。
 - PowerShell 5.1 有几个坑已经在代码里绕过了：JSON 响应不带 `charset` 时会按 ISO-8859-1 解码（已改为取原始字节手动 UTF-8 解码）；默认 TLS 1.0 连不上现代 API（已显式设 1.2/1.3）；`.ps1` 存成无 BOM 时中文会按 GBK 解析报错（所有脚本均为 UTF-8 with BOM）。
 
+## 参与贡献
+
+改起来不难，就几百行 PowerShell。发现问题请开 issue，想加功能直接提 PR：
+
+- 报告问题：[新建 issue](https://github.com/frank-james-83/calibre-quote-note/issues/new/choose)（有模板，会问你环境和终端日志）
+- 改代码：看 [CONTRIBUTING.md](CONTRIBUTING.md)，里面写了代码约定和最需要帮忙的几处
+- 别提交 `quote_settings.json`（里面有 API Key，已被 `.gitignore` 排除）
+
 ## 隐私
 
 摘录内容只写到本地文件。只有当你点「让 AI 回一句」时，原文、出处和你的想法才会发给你自己配置的 API 端点。
