@@ -160,7 +160,7 @@ function Format-Source([string]$book, [string]$loc, [string]$fallback) {
     return $fallback.Trim()
 }
 
-function Format-Entry([string]$quote, [string]$source, [string]$thoughts, [string]$aiReply, [int]$aiMax) {
+function Format-Entry([string]$quote, [string]$source, [string]$thoughts, [string]$aiReply, [int]$aiMax, $thread) {
     $sb = New-Object System.Text.StringBuilder
     [void]$sb.AppendLine('---')
     [void]$sb.AppendLine('')
@@ -177,7 +177,27 @@ function Format-Entry([string]$quote, [string]$source, [string]$thoughts, [strin
     [void]$sb.AppendLine('**想法**')
     [void]$sb.AppendLine('')
     [void]$sb.AppendLine($thoughts)
-    if ($aiReply -and $aiReply.Trim()) {
+    $items = Get-ThreadItems $thread
+    if ($items.Count -gt 0 -and $items[0].r -eq 'ai') {
+        [void]$sb.AppendLine('')
+        [void]$sb.AppendLine("**AI 回应**（${aiMax} 字以内）")
+        [void]$sb.AppendLine('')
+        [void]$sb.AppendLine($items[0].t.Trim())
+        $round = 0
+        for ($i = 1; $i -lt $items.Count; $i++) {
+            $it = $items[$i]
+            if ($it.r -eq 'user') {
+                $round++
+                [void]$sb.AppendLine('')
+                [void]$sb.AppendLine("**还嘴 $round**")
+            } else {
+                [void]$sb.AppendLine('')
+                [void]$sb.AppendLine('**AI 再回**')
+            }
+            [void]$sb.AppendLine('')
+            [void]$sb.AppendLine($it.t.Trim())
+        }
+    } elseif ($aiReply -and $aiReply.Trim()) {
         [void]$sb.AppendLine('')
         [void]$sb.AppendLine("**AI 回应**（${aiMax} 字以内）")
         [void]$sb.AppendLine('')
@@ -198,22 +218,30 @@ function Add-Entry([string]$path, [string]$text) {
     return (Resolve-Path -LiteralPath $path).Path
 }
 
-function Invoke-AI($settings, [string]$quote, [string]$source, [string]$thoughts, [int]$maxChars) {
-    $key = Get-ApiKey $settings
-    if (-not $key) { throw '还没有配置 DeepSeek API Key：打开 http://127.0.0.1:' + $port + '/setup 填一下，或改 quote_settings.json 的 deepseek_api_key 后重启服务' }
-    $n = $maxChars
-    if ($n -lt 10) { $n = 10 }
-    if ($n -gt 400) { $n = 400 }
-    $system = "你是一位严格的读书同伴。用户正在读一本书，写下了一段摘录和自己的想法。你的任务是只针对「想法」给出简短回应：" +
+function New-AiSystem([int]$maxChars, [bool]$debate) {
+    $n = [Math]::Min(400, [Math]::Max(10, $maxChars))
+    if ($debate) {
+        return "你是一位严格的读书同伴，正在和读者就一段摘录进行辩论。前几轮你已经给过判断，现在读者反驳你。" +
+            "如果对方的反驳成立、或带来了你之前没考虑的信息，就承认，并把讨论往前推一步（给出更准确的说法或新的区分）；" +
+            "如果对方站不住，就指出具体哪里在偷换概念、以偏概全或回避了问题。" +
+            "不要和稀泥，不要客套，不要重复已经说过的话，不要分点，不要说「你说得对」然后就结束。" +
+            "用中文，控制在 $n 个字以内，直接给结论。"
+    }
+    return "你是一位严格的读书同伴。用户正在读一本书，写下了一段摘录和自己的想法。你的任务是只针对「想法」给出简短回应：" +
         "如果想法有事实错误、明显偏颇、逻辑跳跃或过于笼统，直接指出并给出更准确的说法；如果想法站得住，就补一个它没考虑到的角度。" +
         "不要复述原文，不要客套，不要分点，不要说「你的想法很好」。用中文，控制在 $n 个字以内，直接给结论。"
-    $user = "出处：$source`n原文：$quote`n我的想法：$thoughts"
+}
+
+function Invoke-AI-Messages($settings, [string]$system, $messages, [int]$maxChars) {
+    $key = Get-ApiKey $settings
+    if (-not $key) { throw '还没有配置 DeepSeek API Key：打开 http://127.0.0.1:' + $Port + '/setup 填一下，或改 quote_settings.json 的 deepseek_api_key 后重启服务' }
+    $n = [Math]::Min(400, [Math]::Max(10, $maxChars))
+    $msgs = New-Object System.Collections.ArrayList
+    [void]$msgs.Add(@{ role = 'system'; content = $system })
+    foreach ($m in @($messages)) { [void]$msgs.Add(@{ role = [string]$m.role; content = [string]$m.content }) }
     $body = @{
         model = $settings.ai_model
-        messages = @(
-            @{ role = 'system'; content = $system },
-            @{ role = 'user'; content = $user }
-        )
+        messages = @($msgs)
         temperature = 0.7
         max_tokens = 400
         stream = $false
@@ -250,6 +278,73 @@ function Invoke-AI($settings, [string]$quote, [string]$source, [string]$thoughts
     return $text
 }
 
+function Invoke-AI($settings, [string]$quote, [string]$source, [string]$thoughts, [int]$maxChars) {
+    $system = New-AiSystem $maxChars $false
+    $user = "出处：$source`n原文：$quote`n我的想法：$thoughts"
+    return Invoke-AI-Messages $settings $system @(@{ role = 'user'; content = $user }) $maxChars
+}
+
+function Invoke-AI-Debate($settings, [string]$quote, [string]$source, [string]$thoughts, $thread, [int]$maxChars) {
+    $system = New-AiSystem $maxChars $true
+    $msgs = New-Object System.Collections.ArrayList
+    [void]$msgs.Add(@{ role = 'user'; content = "出处：$source`n原文：$quote`n我的想法：$thoughts" })
+    foreach ($t in (Get-ThreadItems $thread)) {
+        $role = 'user'
+        if ($t.r -eq 'ai') { $role = 'assistant' }
+        [void]$msgs.Add(@{ role = $role; content = $t.t })
+    }
+    return Invoke-AI-Messages $settings $system $msgs $maxChars
+}
+
+function ConvertTo-ThreadJson($thread) {
+    $parts = @()
+    foreach ($t in (Get-ThreadItems $thread)) {
+        $parts += (@{ r = [string]$t.r; t = [string]$t.t } | ConvertTo-Json -Compress)
+    }
+    return '[' + ($parts -join ',') + ']'
+}
+
+function ConvertFrom-ThreadJson([string]$s) {
+    $list = @()
+    if (-not $s) { return ,$list }
+    try { $raw = $s | ConvertFrom-Json } catch { return ,$list }
+    foreach ($i in @($raw)) {
+        if ($null -ne $i.r -and $null -ne $i.t) { $list += [pscustomobject]@{ r = [string]$i.r; t = [string]$i.t } }
+    }
+    return ,$list
+}
+
+function Get-ThreadItems($thread) {
+    return ,@($thread | Where-Object { $null -ne $_ -and $null -ne $_.r })
+}
+
+function Build-DebateHtml($thread, [bool]$withForm = $true) {
+    $items = Get-ThreadItems $thread
+    if ($items.Count -eq 0) { return '' }
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append('<div class="debate"><div class="hint">和 AI 的往复</div>')
+    foreach ($t in $items) {
+        $label = '我'
+        $cls = 'me'
+        if ($t.r -eq 'ai') { $label = 'AI'; $cls = 'ai' }
+        [void]$sb.Append('<div class="say ' + $cls + '"><span class="who">' + $label + '</span><span class="txt">' + (HtmlEncode $t.t) + '</span></div>')
+    }
+    [void]$sb.Append('</div>')
+    if ($withForm) {
+        [void]$sb.Append('<input type="hidden" name="thread" value="' + (HtmlEncode (ConvertTo-ThreadJson $items)) + '">')
+        [void]$sb.Append('<label class="chk"><input type="checkbox" name="include_ai" value="1" checked> 把这段往复一起写进笔记</label>')
+    }
+    return $sb.ToString()
+}
+
+function Build-RebuttalBlock($thread) {
+    $items = Get-ThreadItems $thread
+    if ($items.Count -eq 0) { return '' }
+    return '<label for="rebut">还嘴</label>' +
+        '<textarea id="rebut" name="rebut" class="t" placeholder="不同意就直接说：这个判断把哪两件事混为一谈了"></textarea>' +
+        '<div class="row tight"><button type="submit" formaction="/rebut" class="ai">再辩一轮</button></div>'
+}
+
 $script:Css = @'
 *{box-sizing:border-box}
 body{margin:0;padding:10px 12px 18px;font:13px/1.5 "Segoe UI","Microsoft YaHei",sans-serif;color:#222}
@@ -269,6 +364,12 @@ button.ghost{flex:0 0 auto}
 .ai-block{margin-top:12px;border:1px solid #d8cffa;border-radius:6px;padding:8px 10px;background:#faf8ff}
 .ai-block .hint{font-size:11px;color:#7a6bb5;margin-bottom:4px}
 .ai-text{font-size:13px;white-space:pre-wrap}
+.debate{margin-top:12px;border:1px solid #d8cffa;border-radius:6px;padding:8px 10px;background:#faf8ff}
+.debate .hint{font-size:11px;color:#7a6bb5;margin-bottom:6px}
+.say{margin:6px 0;padding:6px 8px;border-radius:5px;font-size:12.5px;white-space:pre-wrap}
+.say .who{display:inline-block;font-size:11px;font-weight:600;margin-right:6px;opacity:.75}
+.say.ai{background:#efe8ff;color:#2f2350}
+.say.me{background:#eef3ff;color:#1d2f52}
 .warn{margin-top:10px;font-size:12px;color:#a35a00;background:#fff6e6;border:1px solid #f0d9ae;border-radius:4px;padding:6px 8px}
 .path{margin-top:10px;font-size:11px;color:#888;word-break:break-all}
 .ok{font-size:14px;padding:14px 0}
@@ -313,6 +414,8 @@ $script:FormPage = @'
     </div>
   </div>
   __AIBLOCK__
+  __THREAD__
+  __REBUT__
   __WARN__
 </form>
 <div class="path">写入：__PATH__</div>
@@ -440,25 +543,32 @@ function Handle-Request($client) {
     }
     $aiReply = ''
     if ($f.ContainsKey('ai_reply')) { $aiReply = $f['ai_reply'] }
+    $threadJson = ''
+    if ($f.ContainsKey('thread')) { $threadJson = $f['thread'] }
+    $thread = ConvertFrom-ThreadJson $threadJson
+    $rebut = ''
+    if ($f.ContainsKey('rebut')) { $rebut = $f['rebut'] }
 
     if ($path -eq '/save' -and $method -eq 'POST') {
         $includeAi = $f.ContainsKey('include_ai')
-        if (-not $includeAi) { $aiReply = '' }
+        if (-not $includeAi) { $aiReply = ''; $thread = @() }
         if ($quote.Trim() -eq '') {
             Send-Response $stream (Render $script:ErrorPage @{ '__ERROR__' = (HtmlEncode '原文是空的，没有写入。') })
             return
         }
         try {
             $source = Format-Source $book $loc ''
-            $entry = Format-Entry $quote $source $thoughts $aiReply $maxChars
+            $entry = Format-Entry $quote $source $thoughts $aiReply $maxChars $thread
             $written = Add-Entry $settings.note_path $entry
             $settings.last_book = $book
             $settings.last_loc = $loc
             $settings.ai_max_chars = $maxChars
             Save-Settings $settings
+            $shown = Build-AiBlock $aiReply $maxChars
+            if ((Get-ThreadItems $thread).Count -gt 0) { $shown = Build-DebateHtml $thread $false }
             Send-Response $stream (Render $script:SavedPage @{
                 '__PATH__' = (HtmlEncode $written)
-                '__AIBLOCK__' = (Build-AiBlock $aiReply $maxChars)
+                '__AIBLOCK__' = $shown
             })
         } catch {
             Send-Response $stream (Render $script:ErrorPage @{ '__ERROR__' = (HtmlEncode ($_.Exception.Message)) })
@@ -477,6 +587,7 @@ function Handle-Request($client) {
         } else {
             try {
                 $aiReply = Invoke-AI $settings $quote $source $thoughts $maxChars
+                $thread = @([pscustomobject]@{ r = 'ai'; t = $aiReply })
             } catch {
                 $warn = '<div class="warn">AI 调用失败：' + (HtmlEncode $_.Exception.Message) + '</div>'
             }
@@ -493,7 +604,48 @@ function Handle-Request($client) {
             '__MAXCHARS__' = (HtmlEncode ([string]$maxChars))
             '__BOOKS__' = $opts
             '__NOW__' = ''
-            '__AIBLOCK__' = (Build-AiBlock $aiReply $maxChars)
+            '__AIBLOCK__' = ''
+            '__THREAD__' = (Build-DebateHtml $thread)
+            '__REBUT__' = (Build-RebuttalBlock $thread)
+            '__WARN__' = $warn
+            '__PATH__' = (HtmlEncode $settings.note_path)
+        })
+        return
+    }
+
+    if ($path -eq '/rebut' -and $method -eq 'POST') {
+        $warn = ''
+        if ($rebut.Trim() -eq '') {
+            $warn = '<div class="warn">先把你的反驳写进「还嘴」，再辩一轮。</div>'
+        } elseif ((Get-ThreadItems $thread).Count -eq 0) {
+            $warn = '<div class="warn">还没有 AI 回应，先点一次「让 AI 回一句」。</div>'
+        } elseif (-not (Get-ApiKey $settings)) {
+            $warn = '<div class="warn">还没有配置 DeepSeek API Key：<a href="/setup">点这里填</a>。</div>'
+        } else {
+            $source = Format-Source $book $loc ''
+            try {
+                $thread = (Get-ThreadItems $thread) + @([pscustomobject]@{ r = 'user'; t = $rebut.Trim() })
+                $reply = Invoke-AI-Debate $settings $quote $source $thoughts $thread $maxChars
+                $thread = (Get-ThreadItems $thread) + @([pscustomobject]@{ r = 'ai'; t = $reply })
+            } catch {
+                $warn = '<div class="warn">AI 调用失败：' + (HtmlEncode $_.Exception.Message) + '</div>'
+            }
+        }
+        $opts = ''
+        foreach ($b in (Get-KnownBooks $settings.note_path)) {
+            $opts += '<option value="' + (HtmlEncode $b) + '">'
+        }
+        Send-Response $stream (Render $script:FormPage @{
+            '__QUOTE__' = (HtmlEncode $quote)
+            '__BOOK__' = (HtmlEncode $book)
+            '__LOC__' = (HtmlEncode $loc)
+            '__THOUGHTS__' = (HtmlEncode $thoughts)
+            '__MAXCHARS__' = (HtmlEncode ([string]$maxChars))
+            '__BOOKS__' = $opts
+            '__NOW__' = ''
+            '__AIBLOCK__' = ''
+            '__THREAD__' = (Build-DebateHtml $thread)
+            '__REBUT__' = (Build-RebuttalBlock $thread)
             '__WARN__' = $warn
             '__PATH__' = (HtmlEncode $settings.note_path)
         })
@@ -554,6 +706,8 @@ function Handle-Request($client) {
         '__BOOKS__' = $opts
         '__NOW__' = $nowText
         '__AIBLOCK__' = ''
+        '__THREAD__' = ''
+        '__REBUT__' = ''
         '__WARN__' = $warn
         '__PATH__' = (HtmlEncode $settings.note_path)
     })
@@ -573,6 +727,18 @@ if ($Test) {
     Write-Output ('SECOND_HAS_AI=' + ($content -match '想法二\r?\n\r?\n---'))
     Write-Output ('KEY_PRESENT=' + [bool](Get-ApiKey $s))
     Write-Output ('SOURCE=' + (Format-Source '文学回忆录 上' 'p.23' ''))
+    $th = @(
+        [pscustomobject]@{ r = 'ai'; t = '这判断把「知识」和「信息的数量」混为一谈了。' },
+        [pscustomobject]@{ r = 'user'; t = '我看重的是关系，不是数量。' },
+        [pscustomobject]@{ r = 'ai'; t = '那也要说清关系是哪种，否则仍是比喻。' }
+    )
+    $json = ConvertTo-ThreadJson $th
+    $back = ConvertFrom-ThreadJson $json
+    Write-Output ('THREAD_JSON_LEN=' + $json.Length + ' ROUNDTRIP=' + (@($back).Count) + ' FIRST=' + $back[0].r)
+    $entry2 = Format-Entry '原文' '书 · p.2' '想法' '' 50 $back
+    Write-Output ('DEBATE_HAS_ROUNDS=' + ($entry2 -match '\*\*还嘴 1\*\*' -and $entry2 -match '\*\*AI 再回\*\*'))
+    Write-Output ('DEBATE_HTML_HAS_INPUT=' + ((Build-DebateHtml $back) -match 'name="thread"'))
+    Write-Output ('REBUT_BLOCK_SHOWN=' + [bool](Build-RebuttalBlock $back))
     Write-Output '--- note preview ---'
     Write-Output $content
     Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
