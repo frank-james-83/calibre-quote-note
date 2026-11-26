@@ -25,10 +25,11 @@
 
 ## 最需要帮忙的地方
 
-- **阅读位置**：书名已能自动带入（读 `%APPDATA%\calibre\viewer-webengine.json` 的 `session_data.standalone_recently_opened[0]`）。位置还缺，可用的线索：
-  - `%APPDATA%\calibre\viewer\annots\<sha256>.json`，文件名是 `sha256(书文件绝对路径的 UTF-8 字节)`，内容里有 `{"type":"last-read","pos":"epubcfi(...)","timestamp":...}`，还有高亮/书签记录（带文字片段）。
-  - `%LOCALAPPDATA%\calibre-cache\viewer-reading-rates.json` 里按同一 hash 记了 `chapter_times`。
-  - 难点是把 `epubcfi` 换算成「第几章 / 百分之几」：需要解析转换后的正文（azw3/mobi 是 calibre 临时转成 epub 的，缓存在 `%LOCALAPPDATA%\calibre-cache\ev2`，目录 ACL 不对外开放），而且很多书转换后整个正文是一个 html 文件，spine 索引没有区分度。谁有更好的思路欢迎开 issue 讨论。
+- **阅读位置**：书名和位置都已自动带入（见 `quote_server.py` 的 `calibre_reading_now()`）。线索与坑：
+  - 书名：`viewer-webengine.json` 的 `session_data.standalone_recently_opened[0]`。便携版这个文件在 `<安装目录>\Calibre Settings\`，不在 `%APPDATA%\calibre`。
+  - 位置：同目录 `viewer\annots\<sha256>.json` 里的 `{"type":"last-read","pos":"epubcfi(...)","timestamp":...}`，文件名是 `sha256(书文件绝对路径的 UTF-8 字节)`。
+  - `metadata.db` 的 `last_read_positions` 表在 calibre 5.x 里**永远是空的**：翻页确实会写库（更新 mtime、重建 FTS、写 `annotations_dirtied`），但 `annot_db_data()` 会丢掉 `last-read`，位置只留在上面的 JSON 里。
+  - 还缺「第几章 / 百分之几」：`epubcfi` 里的节点编号不等于 DOM 标签序号（同一本书 CFI 里是 1578，正文只有 1366 个标签），要复刻 calibre 的位置模型解析正文才算得出来。谁有更好的思路欢迎开 issue 讨论。
 - **多 AI 提供方**：现在只对接了 DeepSeek 的 `/chat/completions`。任何 OpenAI 兼容端点应该都能用（改 `ai_base_url`），但没逐个验证过。
-- **笔记格式**：目前是「一条一个 `---` 分隔块」。如果你有更好的 Markdown 组织方式（比如按书分文件、加书名作为二级标题），欢迎讨论。
+- **笔记格式**：目前是「一条一个 `---` 分隔块」。用方向键翻到旧条目再保存时，会就地重写那一块（保留原来的 `## 时间` 标题），不会新增条目。如果你有更好的 Markdown 组织方式（比如按书分文件、加书名作为二级标题），欢迎讨论。
 - **跨平台**：Windows 专属（PowerShell + VBS）。macOS/Linux 上大概要重写成 Python 小服务，如果谁愿意做，我可以把协议和表单结构整理出来。
